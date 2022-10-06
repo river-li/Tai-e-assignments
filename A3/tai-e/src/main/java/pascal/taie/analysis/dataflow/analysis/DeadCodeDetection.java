@@ -33,21 +33,13 @@ import pascal.taie.analysis.graph.cfg.CFGBuilder;
 import pascal.taie.analysis.graph.cfg.Edge;
 import pascal.taie.config.AnalysisConfig;
 import pascal.taie.ir.IR;
-import pascal.taie.ir.exp.ArithmeticExp;
-import pascal.taie.ir.exp.ArrayAccess;
-import pascal.taie.ir.exp.CastExp;
-import pascal.taie.ir.exp.FieldAccess;
-import pascal.taie.ir.exp.NewExp;
-import pascal.taie.ir.exp.RValue;
-import pascal.taie.ir.exp.Var;
+import pascal.taie.ir.exp.*;
 import pascal.taie.ir.stmt.AssignStmt;
 import pascal.taie.ir.stmt.If;
 import pascal.taie.ir.stmt.Stmt;
 import pascal.taie.ir.stmt.SwitchStmt;
 
-import java.util.Comparator;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class DeadCodeDetection extends MethodAnalysis {
 
@@ -71,6 +63,94 @@ public class DeadCodeDetection extends MethodAnalysis {
         Set<Stmt> deadCode = new TreeSet<>(Comparator.comparing(Stmt::getIndex));
         // TODO - finish me
         // Your task is to recognize dead code in ir and add it to deadCode
+
+        for(Stmt stmt:cfg){
+            if (stmt instanceof AssignStmt<?,?>){
+                RValue rv = ((AssignStmt<?, ?>) stmt).getRValue();
+                LValue lv = ((AssignStmt<?, ?>) stmt).getLValue();
+
+                if (lv instanceof Var){
+                    if(!liveVars.getResult(stmt).contains((Var)lv)){
+                        if (hasNoSideEffect(rv)){
+                            deadCode.add(stmt);
+                        }
+                    }
+                }
+            }
+        }
+
+        Queue<Stmt> queue = new LinkedList<Stmt>();
+        Set<Stmt> reachedCode = new TreeSet<>(Comparator.comparing(Stmt::getIndex));
+        reachedCode.add(cfg.getEntry());
+        reachedCode.add(cfg.getExit());
+        queue.add(cfg.getEntry());
+        while (!queue.isEmpty()){
+            Stmt stmt = queue.poll();
+            if (stmt instanceof If){
+                ConditionExp condexp = ((If) stmt).getCondition();
+                Value condvar = ConstantPropagation.evaluate(condexp,constants.getInFact(stmt));
+                if (condvar.isConstant()){
+                    Set<Edge<Stmt>> edges = cfg.getOutEdgesOf(stmt);
+                    for(Edge edge:edges){
+                        if (condvar.getConstant()==1) {
+                            if (edge.getKind() == Edge.Kind.IF_TRUE) {
+                                if (!reachedCode.contains(edge.getTarget())) {
+                                    reachedCode.add((Stmt) edge.getTarget());
+                                    queue.add((Stmt) edge.getTarget());
+                                }
+                                break;
+                            }
+                        }
+                        else if (condvar.getConstant()==0){
+                            if(edge.getKind() == Edge.Kind.IF_FALSE){
+                                if (!reachedCode.contains(edge.getTarget())){
+                                    reachedCode.add((Stmt) edge.getTarget());
+                                    queue.add((Stmt) edge.getTarget());
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+            else if (stmt instanceof SwitchStmt){
+                Var switch_var = ((SwitchStmt) stmt).getVar();
+                Value switch_value = ConstantPropagation.evaluate(switch_var,constants.getInFact(stmt));
+
+                if (switch_value.isConstant()){
+                    for (int casev: ((SwitchStmt) stmt).getCaseValues()){
+                        if (casev==switch_value.getConstant()){
+                            if (!reachedCode.contains(((SwitchStmt) stmt).getTarget(((SwitchStmt) stmt).getCaseValues().indexOf(casev)))){
+                                reachedCode.add(((SwitchStmt) stmt).getTarget(((SwitchStmt) stmt).getCaseValues().indexOf(casev)));
+                                queue.add(((SwitchStmt) stmt).getTarget(((SwitchStmt) stmt).getCaseValues().indexOf(casev)));
+                            }
+                            break;
+                        }
+                    }
+                    if (!((SwitchStmt) stmt).getCaseValues().contains(switch_value.getConstant())){
+                        if(!reachedCode.contains( ((SwitchStmt) stmt).getDefaultTarget())){
+                            reachedCode.add(((SwitchStmt) stmt).getDefaultTarget());
+                            queue.add(((SwitchStmt) stmt).getDefaultTarget());
+                        }
+                    }
+                    continue;
+                }
+            }
+            for(Stmt succ: cfg.getSuccsOf(stmt) ){
+                if (!reachedCode.contains(succ)){
+                    reachedCode.add(succ);
+                    queue.add(succ);
+                }
+            }
+        }
+
+        for(Stmt code: cfg){
+            if (!reachedCode.contains(code)){
+                deadCode.add(code);
+            }
+        }
+
         return deadCode;
     }
 
